@@ -510,10 +510,12 @@ function selectCard(el, vk, panelId, name) {
   const panel = document.getElementById('panel-' + panelId);
   if (!panel) return;
 
-  // 오늘 이후 날짜는 만족도 조사 불가
+  // 날짜 제한: 오늘 오후 2시 이전, 미래는 불가
   const mealYmd = panelId.split('_')[1];
-  const today = formatYMD(toDateStr(new Date()));
-  if (mealYmd >= today) return;
+  const now = new Date();
+  const today = formatYMD(toDateStr(now));
+  if (mealYmd > today) return;
+  if (mealYmd === today && now.getHours() < 14) return;
 
   // 같은 카드 재클릭 → 패널 닫기
   if (activeVk === vk && !panel.classList.contains('hidden')) {
