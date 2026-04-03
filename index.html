@@ -337,7 +337,46 @@
       .menu-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; }
       .menu-card .food-emoji { font-size: 2rem; }
     }
+
+    /* --- 만족도 투표 --- */
+    .vote-bar {
+      margin-top: 16px;
+      padding: 14px 16px;
+      background: #f7fafc;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .vote-title {
+      font-size: 0.8rem;
+      color: #718096;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .vote-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+    }
+    .vote-btn {
+      border: 2px solid #e2e8f0;
+      background: white;
+      border-radius: 20px;
+      padding: 8px 18px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .vote-btn:hover { border-color: #3182ce; background: #ebf8ff; }
+    .vote-btn.voted { border-color: #3182ce; background: #ebf8ff; font-weight: 700; }
+    .vote-count { font-size: 0.8rem; color: #4a5568; font-weight: 600; }
   </style>
+
+  <!-- Firebase CDN -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 
@@ -395,6 +434,52 @@
 </div>
 
 <script>
+// ── Firebase 초기화 ───────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyBsYVr5Gq9fz11P7LA1qAT-h3ckuQv6CMo",
+  authDomain: "happymeal-2bbbf.firebaseapp.com",
+  projectId: "happymeal-2bbbf",
+  storageBucket: "happymeal-2bbbf.firebasestorage.app",
+  messagingSenderId: "116410662244",
+  appId: "1:116410662244:web:de24c47c891aa943428e71"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+async function loadVotes(voteKey) {
+  const doc = await db.collection('votes').doc(voteKey).get();
+  return doc.exists ? doc.data() : { good: 0, meh: 0, bad: 0 };
+}
+
+async function submitVote(voteKey, reaction) {
+  await db.collection('votes').doc(voteKey).set(
+    { [reaction]: firebase.firestore.FieldValue.increment(1) },
+    { merge: true }
+  );
+}
+
+async function handleVote(voteKey, reaction) {
+  const bar = document.getElementById('vote-' + voteKey);
+  if (!bar) return;
+  bar.querySelectorAll('.vote-btn').forEach(b => b.disabled = true);
+  await submitVote(voteKey, reaction);
+  const votes = await loadVotes(voteKey);
+  updateVoteUI(voteKey, votes, reaction);
+}
+
+function updateVoteUI(voteKey, votes, voted) {
+  const good = votes.good || 0, meh = votes.meh || 0, bad = votes.bad || 0;
+  const bar = document.getElementById('vote-' + voteKey);
+  if (!bar) return;
+  bar.querySelector('#cnt-good-' + voteKey).textContent = good;
+  bar.querySelector('#cnt-meh-' + voteKey).textContent = meh;
+  bar.querySelector('#cnt-bad-' + voteKey).textContent = bad;
+  if (voted) {
+    bar.querySelector('.vote-btn[data-r="' + voted + '"]').classList.add('voted');
+    bar.querySelectorAll('.vote-btn').forEach(b => b.disabled = true);
+  }
+}
+
 // ── 상태 ─────────────────────────────────────────────────
 let selectedSchool = null;
 let currentDate    = toDateStr(new Date());
@@ -700,6 +785,12 @@ function renderMeal(ymd) {
   content.innerHTML = meals.map(renderMealCard).join(
     '<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">'
   );
+
+  // 투표 수 로드
+  meals.forEach(m => {
+    const voteKey = `${selectedSchool.SD_SCHUL_CODE}_${m.MLSV_YMD}_${m.MMEAL_SC_CODE}`;
+    loadVotes(voteKey).then(votes => updateVoteUI(voteKey, votes, null));
+  });
 }
 
 function renderMealCard(m) {
@@ -730,10 +821,20 @@ function renderMealCard(m) {
        </div>`
     : '';
 
+  const voteKey = `${selectedSchool.SD_SCHUL_CODE}_${m.MLSV_YMD}_${m.MMEAL_SC_CODE}`;
+
   return `
     <div class="meal-type-label">${typeLabel}</div>
     <div class="menu-grid">${cardsHtml}</div>
-    ${kcalHtml}`;
+    ${kcalHtml}
+    <div class="vote-bar" id="vote-${voteKey}">
+      <div class="vote-title">오늘 급식 어땠나요?</div>
+      <div class="vote-buttons">
+        <button class="vote-btn" data-r="good" onclick="handleVote('${voteKey}','good')">😋 <span class="vote-count" id="cnt-good-${voteKey}">...</span></button>
+        <button class="vote-btn" data-r="meh"  onclick="handleVote('${voteKey}','meh')">😐 <span class="vote-count" id="cnt-meh-${voteKey}">...</span></button>
+        <button class="vote-btn" data-r="bad"  onclick="handleVote('${voteKey}','bad')">😞 <span class="vote-count" id="cnt-bad-${voteKey}">...</span></button>
+      </div>
+    </div>`;
 }
 
 function buildNtrChips(ntrStr) {
