@@ -338,40 +338,29 @@
       .menu-card .food-emoji { font-size: 2rem; }
     }
 
-    /* --- 만족도 투표 --- */
-    .vote-bar {
-      margin-top: 16px;
-      padding: 14px 16px;
-      background: #f7fafc;
-      border-radius: 12px;
-      text-align: center;
-    }
-    .vote-title {
-      font-size: 0.8rem;
-      color: #718096;
-      font-weight: 600;
-      margin-bottom: 10px;
-    }
-    .vote-buttons {
+    /* --- 반찬 카드 만족도 투표 --- */
+    .card-votes {
+      margin-top: 8px;
       display: flex;
       justify-content: center;
-      gap: 10px;
+      gap: 3px;
     }
-    .vote-btn {
-      border: 2px solid #e2e8f0;
-      background: white;
-      border-radius: 20px;
-      padding: 8px 18px;
-      font-size: 0.95rem;
+    .card-vote-btn {
+      border: 1px solid rgba(0,0,0,0.1);
+      background: rgba(255,255,255,0.7);
+      border-radius: 10px;
+      padding: 3px 5px;
+      font-size: 0.68rem;
       cursor: pointer;
-      transition: all 0.15s;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 2px;
+      transition: all 0.15s;
+      line-height: 1;
     }
-    .vote-btn:hover { border-color: #3182ce; background: #ebf8ff; }
-    .vote-btn.voted { border-color: #3182ce; background: #ebf8ff; font-weight: 700; }
-    .vote-count { font-size: 0.8rem; color: #4a5568; font-weight: 600; }
+    .card-vote-btn:hover { background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+    .card-vote-btn.voted { background: white; font-weight: 700; border-color: #3182ce; }
+    .vote-count { font-size: 0.68rem; color: #4a5568; }
   </style>
 
   <!-- Firebase CDN -->
@@ -461,7 +450,7 @@ async function submitVote(voteKey, reaction) {
 async function handleVote(voteKey, reaction) {
   const bar = document.getElementById('vote-' + voteKey);
   if (!bar) return;
-  bar.querySelectorAll('.vote-btn').forEach(b => b.disabled = true);
+  bar.querySelectorAll('.card-vote-btn').forEach(b => b.disabled = true);
   await submitVote(voteKey, reaction);
   const votes = await loadVotes(voteKey);
   updateVoteUI(voteKey, votes, reaction);
@@ -475,8 +464,8 @@ function updateVoteUI(voteKey, votes, voted) {
   bar.querySelector('#cnt-meh-' + voteKey).textContent = meh;
   bar.querySelector('#cnt-bad-' + voteKey).textContent = bad;
   if (voted) {
-    bar.querySelector('.vote-btn[data-r="' + voted + '"]').classList.add('voted');
-    bar.querySelectorAll('.vote-btn').forEach(b => b.disabled = true);
+    bar.querySelector('.card-vote-btn[data-r="' + voted + '"]').classList.add('voted');
+    bar.querySelectorAll('.card-vote-btn').forEach(b => b.disabled = true);
   }
 }
 
@@ -786,10 +775,13 @@ function renderMeal(ymd) {
     '<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">'
   );
 
-  // 투표 수 로드
+  // 반찬별 투표 수 로드
   meals.forEach(m => {
-    const voteKey = `${selectedSchool.SD_SCHUL_CODE}_${m.MLSV_YMD}_${m.MMEAL_SC_CODE}`;
-    loadVotes(voteKey).then(votes => updateVoteUI(voteKey, votes, null));
+    const items = (m.DDISH_NM || '').split('<br/>').filter(Boolean);
+    items.forEach((_, i) => {
+      const vk = `${selectedSchool.SD_SCHUL_CODE}_${m.MLSV_YMD}_${m.MMEAL_SC_CODE}_${i}`;
+      loadVotes(vk).then(votes => updateVoteUI(vk, votes, null));
+    });
   });
 }
 
@@ -806,9 +798,15 @@ function renderMealCard(m) {
   const cardsHtml = items.map((name, i) => {
     const emoji = getFoodEmoji(name);
     const color = CARD_COLORS[i % CARD_COLORS.length];
+    const vk = `${selectedSchool.SD_SCHUL_CODE}_${m.MLSV_YMD}_${m.MMEAL_SC_CODE}_${i}`;
     return `<div class="menu-card ${color}">
       <span class="food-emoji">${emoji}</span>
       <div class="food-name">${name}</div>
+      <div class="card-votes" id="vote-${vk}">
+        <button class="card-vote-btn" data-r="good" onclick="handleVote('${vk}','good')">😋<span class="vote-count" id="cnt-good-${vk}">·</span></button>
+        <button class="card-vote-btn" data-r="meh"  onclick="handleVote('${vk}','meh')">😐<span class="vote-count" id="cnt-meh-${vk}">·</span></button>
+        <button class="card-vote-btn" data-r="bad"  onclick="handleVote('${vk}','bad')">😞<span class="vote-count" id="cnt-bad-${vk}">·</span></button>
+      </div>
     </div>`;
   }).join('');
 
@@ -821,20 +819,10 @@ function renderMealCard(m) {
        </div>`
     : '';
 
-  const voteKey = `${selectedSchool.SD_SCHUL_CODE}_${m.MLSV_YMD}_${m.MMEAL_SC_CODE}`;
-
   return `
     <div class="meal-type-label">${typeLabel}</div>
     <div class="menu-grid">${cardsHtml}</div>
-    ${kcalHtml}
-    <div class="vote-bar" id="vote-${voteKey}">
-      <div class="vote-title">오늘 급식 어땠나요?</div>
-      <div class="vote-buttons">
-        <button class="vote-btn" data-r="good" onclick="handleVote('${voteKey}','good')">😋 <span class="vote-count" id="cnt-good-${voteKey}">...</span></button>
-        <button class="vote-btn" data-r="meh"  onclick="handleVote('${voteKey}','meh')">😐 <span class="vote-count" id="cnt-meh-${voteKey}">...</span></button>
-        <button class="vote-btn" data-r="bad"  onclick="handleVote('${voteKey}','bad')">😞 <span class="vote-count" id="cnt-bad-${voteKey}">...</span></button>
-      </div>
-    </div>`;
+    ${kcalHtml}`;
 }
 
 function buildNtrChips(ntrStr) {
