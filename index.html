@@ -481,6 +481,7 @@ const db = firebase.firestore();
 let activeVk = null;
 let activePanelId = null;
 let pendingReaction = null;
+let pendingVotes = {}; // { panelId: { cardIdx: reaction } }
 let searchTimer = null;
 
 // ── 방문자 카운트 ─────────────────────────────────────────
@@ -541,14 +542,14 @@ function selectCard(el, vk, panelId, name) {
 
   document.getElementById('panel-label-' + panelId).textContent = '🍽️ ' + name + ' 어땠나요?';
 
-  // 이전 투표 상태 반영 (selected 표시만, 저장 버튼 숨김)
-  const prevVoted = localStorage.getItem('vote_' + vk);
+  // 이 카드에 대한 pending 또는 저장된 선택 반영
+  const cardIdx = vk.split('_').pop();
+  const pendingR = pendingVotes[panelId] && pendingVotes[panelId][cardIdx];
+  const prevVoted = pendingR || localStorage.getItem('vote_' + vk);
   ['good','meh','bad'].forEach(r => {
     const btn = document.getElementById('vbtn-' + r + '-' + panelId);
     if (btn) btn.classList.toggle('selected', r === prevVoted);
   });
-  const saveBtn = document.getElementById('vsave-' + panelId);
-  if (saveBtn) saveBtn.classList.add('hidden');
 
   panel.classList.remove('hidden');
 
@@ -561,72 +562,56 @@ function selectCard(el, vk, panelId, name) {
 }
 
 function selectEmoji(reaction) {
-  if (!activePanelId) return;
-  const prevVoted = localStorage.getItem('vote_' + activeVk);
+  if (!activePanelId || !activeVk) return;
+  const cardIdx = activeVk.split('_').pop();
+  if (!pendingVotes[activePanelId]) pendingVotes[activePanelId] = {};
 
   // 재클릭 → 선택 취소
-  if (pendingReaction === reaction) {
-    pendingReaction = null;
+  if (pendingVotes[activePanelId][cardIdx] === reaction) {
+    delete pendingVotes[activePanelId][cardIdx];
   } else {
-    pendingReaction = reaction;
+    pendingVotes[activePanelId][cardIdx] = reaction;
   }
 
+  const current = pendingVotes[activePanelId][cardIdx];
   ['good','meh','bad'].forEach(r => {
     const btn = document.getElementById('vbtn-' + r + '-' + activePanelId);
-    if (btn) btn.classList.toggle('selected', r === pendingReaction);
+    if (btn) btn.classList.toggle('selected', r === current);
   });
 
-  const saveBtn = document.getElementById('vsave-' + activePanelId);
-  if (saveBtn) {
-    // 이전 투표와 다를 때, 또는 취소할 때만 저장 버튼 표시
-    const changed = pendingReaction !== prevVoted;
-    saveBtn.classList.toggle('hidden', !changed && pendingReaction !== null);
-    if (pendingReaction === null && prevVoted) {
-      saveBtn.classList.remove('hidden'); // 취소 저장
-      saveBtn.textContent = '취소 저장';
-    } else if (pendingReaction !== null) {
-      saveBtn.classList.remove('hidden');
-      saveBtn.textContent = '저장';
-    } else {
-      saveBtn.classList.add('hidden');
-    }
-  }
+  // 모든 반찬 선택 완료 시 저장 버튼 표시
+  const panel = document.getElementById('panel-' + activePanelId);
+  const total = panel ? parseInt(panel.dataset.total) : 0;
+  const selectedCount = Object.keys(pendingVotes[activePanelId]).length;
+  const saveBtn = document.getElementById('msave-' + activePanelId);
+  if (saveBtn) saveBtn.classList.toggle('hidden', selectedCount < total);
 }
 
-async function saveVote() {
-  if (!activeVk || !activePanelId) return;
-  const vk = activeVk;
-  const panelId = activePanelId;
-  const prevVoted = localStorage.getItem('vote_' + vk);
-  const reaction = pendingReaction;
-
-  const saveBtn = document.getElementById('vsave-' + panelId);
+async function saveMealVotes(panelId) {
+  const votes = pendingVotes[panelId];
+  if (!votes) return;
+  const saveBtn = document.getElementById('msave-' + panelId);
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '저장 중...'; }
 
-  // 이전 투표 취소
-  if (prevVoted) {
-    await db.collection('votes').doc(vk).set(
-      { [prevVoted]: firebase.firestore.FieldValue.increment(-1) }, { merge: true }
-    );
-  }
-  // 새 투표 저장
-  if (reaction) {
+  for (const [idx, reaction] of Object.entries(votes)) {
+    const vk = `${panelId}_${idx}`;
+    const prevVoted = localStorage.getItem('vote_' + vk);
+    if (prevVoted) {
+      await db.collection('votes').doc(vk).set(
+        { [prevVoted]: firebase.firestore.FieldValue.increment(-1) }, { merge: true }
+      );
+    }
     await db.collection('votes').doc(vk).set(
       { [reaction]: firebase.firestore.FieldValue.increment(1) }, { merge: true }
     );
     localStorage.setItem('vote_' + vk, reaction);
-  } else {
-    localStorage.removeItem('vote_' + vk);
   }
 
-  const votes = await loadVotes(vk);
-  ['good','meh','bad'].forEach(r => {
-    const cnt = document.getElementById('vcnt-' + r + '-' + panelId);
-    if (cnt) cnt.textContent = votes[r] || 0;
-  });
-
-  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '저장 완료 ✓'; saveBtn.classList.add('hidden'); setTimeout(() => saveBtn.classList.add('hidden'), 1500); }
-  pendingReaction = null;
+  delete pendingVotes[panelId];
+  if (saveBtn) {
+    saveBtn.textContent = '저장 완료 ✓';
+    setTimeout(() => { saveBtn.textContent = '모든 반찬 평가 완료 — 저장하기'; saveBtn.disabled = false; saveBtn.classList.add('hidden'); }, 2000);
+  }
 }
 
 // ── 상태 ─────────────────────────────────────────────────
@@ -972,15 +957,15 @@ function renderMealCard(m) {
     : '';
 
   const votePanel = `
-    <div class="vote-panel hidden" id="panel-${panelId}">
+    <div class="vote-panel hidden" id="panel-${panelId}" data-total="${items.length}">
       <div class="vote-panel-name" id="panel-label-${panelId}"></div>
       <div class="vote-panel-btns">
         <button class="vote-emoji-btn" id="vbtn-good-${panelId}" onclick="selectEmoji('good')">😋<span>맛있어요</span><span class="vote-count" id="vcnt-good-${panelId}"></span></button>
         <button class="vote-emoji-btn" id="vbtn-meh-${panelId}"  onclick="selectEmoji('meh')">😐<span>보통이에요</span><span class="vote-count" id="vcnt-meh-${panelId}"></span></button>
         <button class="vote-emoji-btn" id="vbtn-bad-${panelId}"  onclick="selectEmoji('bad')">😞<span>별로예요</span><span class="vote-count" id="vcnt-bad-${panelId}"></span></button>
       </div>
-      <button class="vote-save-btn hidden" id="vsave-${panelId}" onclick="saveVote()">저장</button>
-    </div>`;
+    </div>
+    <button class="vote-save-btn hidden" id="msave-${panelId}" onclick="saveMealVotes('${panelId}')">모든 반찬 평가 완료 — 저장하기</button>`;
 
   return `
     <div class="meal-type-label">${typeLabel}</div>
