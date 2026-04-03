@@ -379,8 +379,29 @@
     }
     .vote-emoji-btn span { font-size: 0.75rem; color: #4a5568; font-weight: 600; }
     .vote-emoji-btn:hover { border-color: #3182ce; background: #ebf8ff; transform: scale(1.05); }
-    .vote-emoji-btn.voted { border-color: #3182ce; background: #ebf8ff; }
+    .vote-emoji-btn.selected { border-color: #3182ce; background: #ebf8ff; }
     .vote-emoji-btn .vote-count { font-size: 0.8rem; color: #718096; }
+
+    .vote-save-btn {
+      margin-top: 14px;
+      padding: 10px 28px;
+      background: #3182ce;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .vote-save-btn:hover { background: #2b6cb0; }
+    .vote-save-btn:disabled { background: #a0aec0; cursor: default; }
+
+    .visit-counter {
+      font-size: 0.82rem;
+      opacity: 0.8;
+      margin-top: 4px;
+    }
   </style>
 
   <!-- Firebase CDN -->
@@ -392,6 +413,7 @@
 <header>
   <h1>🍱 서울 지역 내 초등학교 급식 메뉴 조회</h1>
   <p>NEIS 교육정보 공개서비스를 활용한 급식 조회</p>
+  <p class="visit-counter" id="visitCounter"></p>
 </header>
 
 <div class="container">
@@ -401,6 +423,7 @@
     <div class="search-row">
       <input class="search-input" id="schoolNameInput" type="text"
         placeholder="서울 지역 내의 학교 이름을 입력하세요."
+        oninput="onSearchInput(this.value)"
         onkeydown="if(event.key==='Enter') searchSchool()" />
       <button class="btn btn-primary" onclick="searchSchool()">검색</button>
     </div>
@@ -457,6 +480,26 @@ const db = firebase.firestore();
 
 let activeVk = null;
 let activePanelId = null;
+let pendingReaction = null;
+let searchTimer = null;
+
+// ── 방문자 카운트 ─────────────────────────────────────────
+(async function trackVisit() {
+  await db.collection('meta').doc('visits').set(
+    { count: firebase.firestore.FieldValue.increment(1) }, { merge: true }
+  );
+  const doc = await db.collection('meta').doc('visits').get();
+  const count = doc.exists ? (doc.data().count || 0) : 0;
+  const el = document.getElementById('visitCounter');
+  if (el) el.textContent = `👥 누적 방문자 ${count.toLocaleString()}명`;
+})();
+
+// ── 실시간 검색 (디바운스 300ms) ─────────────────────────
+function onSearchInput(val) {
+  clearTimeout(searchTimer);
+  if (val.trim().length < 1) return;
+  searchTimer = setTimeout(() => searchSchool(), 300);
+}
 
 async function loadVotes(voteKey) {
   const doc = await db.collection('votes').doc(voteKey).get();
@@ -471,7 +514,7 @@ function selectCard(el, vk, panelId, name) {
   if (activeVk === vk && !panel.classList.contains('hidden')) {
     panel.classList.add('hidden');
     el.classList.remove('selected');
-    activeVk = null; activePanelId = null;
+    activeVk = null; activePanelId = null; pendingReaction = null;
     return;
   }
 
@@ -479,71 +522,104 @@ function selectCard(el, vk, panelId, name) {
   if (activePanelId) {
     const prev = document.getElementById('panel-' + activePanelId);
     if (prev) prev.classList.add('hidden');
+    const saveBtn = document.getElementById('vsave-' + activePanelId);
+    if (saveBtn) saveBtn.classList.add('hidden');
   }
   document.querySelectorAll('.menu-card.selected').forEach(c => c.classList.remove('selected'));
 
   activeVk = vk;
   activePanelId = panelId;
+  pendingReaction = null;
   el.classList.add('selected');
 
-  // 이름 표시
   document.getElementById('panel-label-' + panelId).textContent = '🍽️ ' + name + ' 어땠나요?';
 
-  // 이전 투표 상태 반영
+  // 이전 투표 상태 반영 (selected 표시만, 저장 버튼 숨김)
   const prevVoted = localStorage.getItem('vote_' + vk);
   ['good','meh','bad'].forEach(r => {
     const btn = document.getElementById('vbtn-' + r + '-' + panelId);
-    if (btn) { btn.classList.toggle('voted', r === prevVoted); }
+    if (btn) btn.classList.toggle('selected', r === prevVoted);
   });
+  const saveBtn = document.getElementById('vsave-' + panelId);
+  if (saveBtn) saveBtn.classList.add('hidden');
 
   panel.classList.remove('hidden');
 
-  // 투표 수 로드
   loadVotes(vk).then(votes => {
     ['good','meh','bad'].forEach(r => {
-      const el = document.getElementById('vcnt-' + r + '-' + panelId);
-      if (el) el.textContent = votes[r] || 0;
+      const cnt = document.getElementById('vcnt-' + r + '-' + panelId);
+      if (cnt) cnt.textContent = votes[r] || 0;
     });
   });
 }
 
-async function castVote(reaction) {
+function selectEmoji(reaction) {
+  if (!activePanelId) return;
+  const prevVoted = localStorage.getItem('vote_' + activeVk);
+
+  // 재클릭 → 선택 취소
+  if (pendingReaction === reaction) {
+    pendingReaction = null;
+  } else {
+    pendingReaction = reaction;
+  }
+
+  ['good','meh','bad'].forEach(r => {
+    const btn = document.getElementById('vbtn-' + r + '-' + activePanelId);
+    if (btn) btn.classList.toggle('selected', r === pendingReaction);
+  });
+
+  const saveBtn = document.getElementById('vsave-' + activePanelId);
+  if (saveBtn) {
+    // 이전 투표와 다를 때, 또는 취소할 때만 저장 버튼 표시
+    const changed = pendingReaction !== prevVoted;
+    saveBtn.classList.toggle('hidden', !changed && pendingReaction !== null);
+    if (pendingReaction === null && prevVoted) {
+      saveBtn.classList.remove('hidden'); // 취소 저장
+      saveBtn.textContent = '취소 저장';
+    } else if (pendingReaction !== null) {
+      saveBtn.classList.remove('hidden');
+      saveBtn.textContent = '저장';
+    } else {
+      saveBtn.classList.add('hidden');
+    }
+  }
+}
+
+async function saveVote() {
   if (!activeVk || !activePanelId) return;
   const vk = activeVk;
   const panelId = activePanelId;
   const prevVoted = localStorage.getItem('vote_' + vk);
+  const reaction = pendingReaction;
 
-  ['good','meh','bad'].forEach(r => {
-    const btn = document.getElementById('vbtn-' + r + '-' + panelId);
-    if (btn) btn.disabled = true;
-  });
+  const saveBtn = document.getElementById('vsave-' + panelId);
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '저장 중...'; }
 
-  if (prevVoted === reaction) {
-    // 재클릭 → 취소
+  // 이전 투표 취소
+  if (prevVoted) {
     await db.collection('votes').doc(vk).set(
-      { [reaction]: firebase.firestore.FieldValue.increment(-1) }, { merge: true }
+      { [prevVoted]: firebase.firestore.FieldValue.increment(-1) }, { merge: true }
     );
-    localStorage.removeItem('vote_' + vk);
-  } else {
-    // 이전 투표 취소 후 새 투표
-    if (prevVoted) {
-      await db.collection('votes').doc(vk).set(
-        { [prevVoted]: firebase.firestore.FieldValue.increment(-1) }, { merge: true }
-      );
-    }
+  }
+  // 새 투표 저장
+  if (reaction) {
     await db.collection('votes').doc(vk).set(
       { [reaction]: firebase.firestore.FieldValue.increment(1) }, { merge: true }
     );
     localStorage.setItem('vote_' + vk, reaction);
+  } else {
+    localStorage.removeItem('vote_' + vk);
   }
 
   const votes = await loadVotes(vk);
   ['good','meh','bad'].forEach(r => {
-    const btn = document.getElementById('vbtn-' + r + '-' + panelId);
     const cnt = document.getElementById('vcnt-' + r + '-' + panelId);
-    if (btn) { btn.disabled = false; btn.classList.toggle('voted', r === localStorage.getItem('vote_' + vk)); }
     if (cnt) cnt.textContent = votes[r] || 0;
   });
+
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '저장 완료 ✓'; saveBtn.classList.add('hidden'); setTimeout(() => saveBtn.classList.add('hidden'), 1500); }
+  pendingReaction = null;
 }
 
 // ── 상태 ─────────────────────────────────────────────────
@@ -892,10 +968,11 @@ function renderMealCard(m) {
     <div class="vote-panel hidden" id="panel-${panelId}">
       <div class="vote-panel-name" id="panel-label-${panelId}"></div>
       <div class="vote-panel-btns">
-        <button class="vote-emoji-btn" id="vbtn-good-${panelId}" onclick="castVote('good')">😋<span>맛있어요</span><span class="vote-count" id="vcnt-good-${panelId}"></span></button>
-        <button class="vote-emoji-btn" id="vbtn-meh-${panelId}"  onclick="castVote('meh')">😐<span>보통이에요</span><span class="vote-count" id="vcnt-meh-${panelId}"></span></button>
-        <button class="vote-emoji-btn" id="vbtn-bad-${panelId}"  onclick="castVote('bad')">😞<span>별로예요</span><span class="vote-count" id="vcnt-bad-${panelId}"></span></button>
+        <button class="vote-emoji-btn" id="vbtn-good-${panelId}" onclick="selectEmoji('good')">😋<span>맛있어요</span><span class="vote-count" id="vcnt-good-${panelId}"></span></button>
+        <button class="vote-emoji-btn" id="vbtn-meh-${panelId}"  onclick="selectEmoji('meh')">😐<span>보통이에요</span><span class="vote-count" id="vcnt-meh-${panelId}"></span></button>
+        <button class="vote-emoji-btn" id="vbtn-bad-${panelId}"  onclick="selectEmoji('bad')">😞<span>별로예요</span><span class="vote-count" id="vcnt-bad-${panelId}"></span></button>
       </div>
+      <button class="vote-save-btn hidden" id="vsave-${panelId}" onclick="saveVote()">저장</button>
     </div>`;
 
   return `
